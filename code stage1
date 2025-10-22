@@ -1,0 +1,336 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <ctype.h>
+#include <stdbool.h>
+
+// -------- 全局变量（沿用你们原有的） --------
+char inputFilePath[256];
+char toxicWordsFile[256]; // 未使用，占位
+char stopWordsFile[256];  // 未使用，占位
+char outputFilePath[256];
+
+char words[1000][50];   // 简易词表（最多 1000 个 token）
+char toxicWords[500][50]; // 未使用，占位
+int  wordCount = 0;
+int  toxicCount = 0;
+
+// -------- 函数声明（沿用你们原型） --------
+void loadTextFile();
+void displayGeneralStatistics();
+void displayToxicWordAnalysis();
+void sortAndDisplayTopNWords();
+void saveResultsToFile();
+void loadDictionaries();
+void handleError(const char *message);
+void translateTextToEnglish();
+
+// ====== 新增：通用小工具（直接可用）======
+
+// 读一整行（含空格），并去掉行尾 \n\r
+static int read_line(char *buf, size_t cap){
+    if(!fgets(buf, cap, stdin)) return 0;
+    size_t n = strlen(buf);
+    while(n && (buf[n-1]=='\n' || buf[n-1]=='\r')) buf[--n] = '\0';
+    return 1;
+}
+
+// 允许输入路径带引号（从资源管理器复制时常见），自动剥掉
+static void strip_quotes(char *s){
+    size_t n = strlen(s);
+    if(n >= 2 && s[0]=='"' && s[n-1]=='"'){
+        memmove(s, s+1, n-2);
+        s[n-2] = '\0';
+    }
+}
+
+// 把一行规范化为：小写 + 非字母数字转空格
+static void normalize_line(char *s){
+    for(char *p=s; *p; ++p){
+        unsigned char c = (unsigned char)*p;
+        if(isalnum(c)) *p = (char)tolower(c);
+        else *p = ' ';
+    }
+}
+
+// --- Windows UTF-8 路径支持（中文/非 ASCII 更稳）---
+#ifdef _WIN32
+#include <windows.h>
+#include <wchar.h>
+static FILE* fopen_u8(const char *utf8Path, const char *mode){
+    wchar_t wpath[MAX_PATH], wmode[8];
+    if(!MultiByteToWideChar(CP_UTF8, 0, utf8Path, -1, wpath, MAX_PATH)) return NULL;
+    if(!MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, 8)) return NULL;
+    return _wfopen(wpath, wmode);
+}
+#endif
+
+// 统一的只读打开：自动去引号、Windows 用宽字符
+static FILE* open_file_read(const char *pathIn){
+    static char tmp[1024];
+    strncpy(tmp, pathIn, sizeof(tmp)-1);
+    tmp[sizeof(tmp)-1] = '\0';
+    strip_quotes(tmp);
+#ifdef _WIN32
+    FILE *f = fopen_u8(tmp, "r");
+#else
+    FILE *f = fopen(tmp, "r");
+#endif
+    if(!f){
+        fprintf(stderr, "[!] fopen failed for: %s\n", tmp);
+        perror("    reason");
+    }
+    return f;
+}
+
+// ====== 你的主程序（仅对读取路径/退出做了小改）======
+int main(){
+    int userChoice;
+
+    for(;;){
+        printf("\nToxic Word Text Analyser Menu\n");
+        printf("1. Load text file for analysis (e.g., enter text file path)\n");
+        printf("2. Display general word statistics (e.g., word counts, frequencies)\n");
+        printf("3. Display toxic word analysis (e.g., toxicity score)\n");
+        printf("4. Sort and display top N words (e.g., by frequency or toxicity)\n");
+        printf("5. Save results to output file\n");
+        printf("6. Translate text to English\n");
+        printf("7. Exit program\n");
+        printf("Enter a choice or type 7 to exit the system: ");
+
+        if(scanf("%d", &userChoice) != 1){
+            // 清理错误输入
+            int c; while((c=getchar())!='\n' && c!=EOF);
+            printf("Invalid input. Please enter a number 1-7.\n");
+            continue;
+        }
+        // 吃掉行尾换行，方便后面用 read_line 读路径
+        int c; while((c=getchar())!='\n' && c!=EOF);
+
+        switch(userChoice){
+            case 1:
+                printf("Enter text file path (e.g., C:\\Users\\...\\sample.txt):\n> ");
+                if(!read_line(inputFilePath, sizeof(inputFilePath))){
+                    handleError("Failed to read file path"); break;
+                }
+                loadTextFile();
+                break;
+
+            case 2:
+                displayGeneralStatistics();
+                break;
+
+            case 3:
+                displayToxicWordAnalysis();
+                break;
+
+            case 4:
+                sortAndDisplayTopNWords();
+                break;
+
+            case 5:
+                printf("Enter output file path (e.g., analysis_report.txt):\n> ");
+                if(!read_line(outputFilePath, sizeof(outputFilePath))){
+                    handleError("Failed to read output path"); break;
+                }
+                saveResultsToFile();
+                break;
+
+            case 6:
+                translateTextToEnglish();
+                break;
+
+            case 7:
+                printf("Exiting the system... Goodbye!\n");
+                return 0;  // 真正退出
+
+            default:
+                printf("%d is an invalid choice. Please enter a number between 1 and 7.\n", userChoice);
+        }
+    }
+}
+
+// ====== 把 TODO 都落地成可运行版（简单直白实现）======
+
+void loadTextFile(){
+    FILE *f = open_file_read(inputFilePath);
+    if(!f){ handleError("Cannot open input file"); return; }
+
+    wordCount = 0;
+    char line[4096];
+
+    while(fgets(line, sizeof(line), f)){
+        normalize_line(line); // 小写化 + 非字母数字 → 空格
+        char *save = NULL;
+        char *tok  = strtok_r(line, " \t\r\n", &save);
+        while(tok){
+            size_t L = strlen(tok);
+            if(L>0 && L < sizeof(words[0])){
+                if(wordCount < (int)(sizeof(words)/sizeof(words[0]))){
+                    strcpy(words[wordCount++], tok);
+                } else {
+                    // 超容量就停止（后续可以换动态数组/哈希）
+                    break;
+                }
+            }
+            tok = strtok_r(NULL, " \t\r\n", &save);
+        }
+        if(wordCount >= (int)(sizeof(words)/sizeof(words[0]))) break;
+    }
+    fclose(f);
+    printf("[✓] Loaded %d tokens from file.\n", wordCount);
+}
+
+void displayGeneralStatistics(){
+    if(wordCount == 0){
+        printf("[!] No text loaded. Use menu 1 first.\n");
+        return;
+    }
+    int unique = 0;
+    for(int i=0;i<wordCount;i++){
+        int seen = 0;
+        for(int j=0;j<i;j++){
+            if(strcmp(words[i], words[j])==0){ seen = 1; break; }
+        }
+        if(!seen) unique++;
+    }
+    printf("General statistics:\n");
+    printf("Total words (tokens): %d\n", wordCount);
+    printf("Unique words        : %d\n", unique);
+}
+
+void displayToxicWordAnalysis(){
+    // 先占位提示（下一阶段接入 toxicwords.txt 并统计占比/Top-N）
+    if(wordCount == 0){
+        printf("[!] No text loaded. Use menu 1 first.\n");
+        return;
+    }
+    printf("[i] Toxic analysis is not implemented yet. (Next stage)\n");
+    printf("Toxic words detected: %d (placeholder)\n", toxicCount);
+}
+
+void sortAndDisplayTopNWords(){
+    if(wordCount == 0){
+        printf("[!] No text loaded. Use menu 1 first.\n");
+        return;
+    }
+    int n;
+    printf("Enter N (a number) to get the top words: ");
+    if(scanf("%d", &n) != 1){
+        int c; while((c=getchar())!='\n' && c!=EOF);
+        printf("Invalid number.\n");
+        return;
+    }
+    int c; while((c=getchar())!='\n' && c!=EOF);
+
+    // 构建唯一词与频次表
+    char uniq[1000][50];
+    int  freq[1000];
+    int  ucnt = 0;
+
+    for(int i=0;i<wordCount;i++){
+        int k = -1;
+        for(int j=0;j<ucnt;j++){
+            if(strcmp(words[i], uniq[j])==0){ k = j; break; }
+        }
+        if(k==-1){
+            strcpy(uniq[ucnt], words[i]);
+            freq[ucnt] = 1;
+            ucnt++;
+        }else{
+            freq[k]++;
+        }
+    }
+
+    // 简单排序：频次降序，同频按字母序
+    for(int i=0;i<ucnt-1;i++){
+        for(int j=i+1;j<ucnt;j++){
+            if(freq[j] > freq[i] || (freq[j]==freq[i] && strcmp(uniq[j],uniq[i])<0)){
+                int tf = freq[i]; freq[i] = freq[j]; freq[j] = tf;
+                char tmp[50]; strcpy(tmp, uniq[i]); strcpy(uniq[i], uniq[j]); strcpy(uniq[j], tmp);
+            }
+        }
+    }
+
+    if(n > ucnt) n = ucnt;
+    printf("Top %d words:\n", n);
+    for(int i=0;i<n;i++){
+        printf("%2d. %-20s %d\n", i+1, uniq[i], freq[i]);
+    }
+}
+
+void saveResultsToFile(){
+    if(wordCount == 0){
+        printf("[!] No text loaded. Use menu 1 first.\n");
+        return;
+    }
+    // 去引号再打开文件
+    char path[512];
+    strncpy(path, outputFilePath, sizeof(path)-1);
+    path[sizeof(path)-1] = '\0';
+    strip_quotes(path);
+
+#ifdef _WIN32
+    FILE *f = fopen_u8(path, "w");
+#else
+    FILE *f = fopen(path, "w");
+#endif
+    if(!f){
+        fprintf(stderr, "[!] fopen(output) failed for: %s\n", path);
+        perror("    reason");
+        handleError("Cannot open output file");
+        return;
+    }
+
+    // 计算唯一词与频次（与 TopN 相同逻辑）
+    char uniq[1000][50];
+    int  freq[1000];
+    int  ucnt = 0;
+    for(int i=0;i<wordCount;i++){
+        int k=-1;
+        for(int j=0;j<ucnt;j++){
+            if(strcmp(words[i], uniq[j])==0){ k=j; break; }
+        }
+        if(k==-1){ strcpy(uniq[ucnt], words[i]); freq[ucnt]=1; ucnt++; }
+        else { freq[k]++; }
+    }
+    for(int i=0;i<ucnt-1;i++){
+        for(int j=i+1;j<ucnt;j++){
+            if(freq[j] > freq[i] || (freq[j]==freq[i] && strcmp(uniq[j],uniq[i])<0)){
+                int tf=freq[i]; freq[i]=freq[j]; freq[j]=tf;
+                char tmp[50]; strcpy(tmp, uniq[i]); strcpy(uniq[i], uniq[j]); strcpy(uniq[j], tmp);
+            }
+        }
+    }
+
+    fprintf(f, "=== Text Analysis Report ===\n");
+    fprintf(f, "Total tokens: %d\n", wordCount);
+    fprintf(f, "Unique words: %d\n\n", ucnt);
+    int topn = (ucnt < 10) ? ucnt : 10;
+    fprintf(f, "Top %d words:\n", topn);
+    for(int i=0;i<topn;i++){
+        fprintf(f, "%2d. %-20s %d\n", i+1, uniq[i], freq[i]);
+    }
+    fclose(f);
+    printf("[✓] Saved report to %s\n", path);
+}
+
+void loadDictionaries(){
+    // 下一阶段：加载 stopwords/toxicwords 到数组或哈希
+    printf("Dictionaries loaded (placeholder).\n");
+}
+
+void handleError(const char *message){
+    printf("Error: %s\n", message);
+}
+
+void translateTextToEnglish(){
+    char sentence[256];
+    printf("Enter a non-English sentence to translate: ");
+    if(!read_line(sentence, sizeof(sentence))){
+        printf("Failed to read sentence.\n"); return;
+    }
+    // 占位：回显
+    printf("Translating...\nTranslated text: %s\n", sentence);
+}
