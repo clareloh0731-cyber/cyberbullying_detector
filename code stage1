@@ -92,7 +92,7 @@ static FILE* open_file_read(const char *pathIn){
 #endif
     if(!f){
         fprintf(stderr, "[!] fopen failed for: %s\n", tmp);
-        perror("    reason");
+        perror("reason");
     }
     return f;
 }
@@ -108,7 +108,7 @@ int main(){
         printf("3. Display toxic word analysis (e.g., toxicity score)\n");
         printf("4. Sort and display top N words (e.g., by frequency or toxicity)\n");
         printf("5. Save results to output file\n");
-        printf("6. Translate text to English\n");
+        printf("6. Translate text to English\n"); //output file
         printf("7. Exit program\n");
         printf("Enter a choice or type 7 to exit the system: ");
 
@@ -290,13 +290,76 @@ void handleFileMenu() {
     }
 }
 
+// ====== 新增：显示文件历史函数（显示CSV到TXT转换） ======
+
+// ====== 新增：显示文件历史函数（显示CSV到TXT转换） ======
+void showFileHistory(int fileNumber) {
+    char* filePath = (fileNumber == 1) ? inputFilePath1 : inputFilePath2;
+    int wordCount = (fileNumber == 1) ? wordCount1 : wordCount2;
+    bool fileLoaded = (fileNumber == 1) ? file1Loaded : file2Loaded;
+
+    printf("\nFile %d History\n", fileNumber);
+    printf("==================\n");
+    if (!fileLoaded) {
+        printf("No file loaded for File %d.\n", fileNumber);
+        return;
+    }
+
+    // Remove quotes from file path for proper CSV detection
+    char cleanPath[256];
+    strncpy(cleanPath, filePath, sizeof(cleanPath)-1);
+    cleanPath[sizeof(cleanPath)-1] = '\0';
+    strip_quotes(cleanPath);
+
+    // Determine original file type and processed file type
+    bool isCSV = isCSVFile(cleanPath);
+    const char* originalType = isCSV ? "CSV" : "Text";
+    const char* processedType = "Text"; // CSV files are always converted to text format
+    
+    // Create converted file path (replace .csv with .txt if it's a CSV file)
+    char convertedPath[256];
+    strncpy(convertedPath, cleanPath, sizeof(convertedPath)-1);
+    convertedPath[sizeof(convertedPath)-1] = '\0';
+    
+    if (isCSV) {
+        // Replace .csv or .CSV extension with .txt
+        char* dot = strrchr(convertedPath, '.');
+        if (dot != NULL) {
+            strcpy(dot, ".txt");
+        }
+        
+        printf("Original file path: %s\n", cleanPath);
+        printf("Converted file path: %s\n", convertedPath);
+        printf("Original file type: %s\n", originalType);
+        printf("Processed as: %s\n", processedType);
+        printf("Note: CSV file converted to text format (columns extracted as words)\n");
+    } else {
+        // For text files, just show the original path
+        printf("File path: %s\n", cleanPath);
+        printf("File type: %s\n", originalType);
+    }
+    
+    printf("Total words loaded: %d\n", wordCount);
+
+    // 显示前10个单词作为样本
+    char (*words)[50] = (fileNumber == 1) ? words1 : words2;
+    int sampleCount = (wordCount < 10) ? wordCount : 10;
+    printf("Sample words (%d): ", sampleCount);
+    for(int i = 0; i < sampleCount; i++) {
+        printf("%s", words[i]);
+        if(i < sampleCount - 1) printf(", ");
+    }
+    printf("\n");
+}
+
 // ====== 更新：加载文本文件函数（支持CSV） ======
+// ====== 更新：加载文本文件函数（支持CSV，显示转换信息） ======
 void loadTextFile(int fileNumber){
     char* filePath = (fileNumber == 1) ? inputFilePath1 : inputFilePath2;
     char (*targetWords)[50] = (fileNumber == 1) ? words1 : words2;
-    int* targetWordCount = (fileNumber == 1) ? &wordCount1 : &wordCount2;
+    int *targetWordCount = (fileNumber == 1) ? &wordCount1 : &wordCount2;
     bool* targetFileLoaded = (fileNumber == 1) ? &file1Loaded : &file2Loaded;
-    
+
     FILE *f = open_file_read(filePath);
     if(!f){ 
         handleError("Cannot open input file"); 
@@ -304,13 +367,20 @@ void loadTextFile(int fileNumber){
     }
 
     *targetWordCount = 0;
-    
+
+    // Remove quotes for file type detection
+    char cleanPath[256];
+    strncpy(cleanPath, filePath, sizeof(cleanPath)-1);
+    cleanPath[sizeof(cleanPath)-1] = '\0';
+    strip_quotes(cleanPath);
+
     // 检查文件类型并相应处理
-    if (isCSVFile(filePath)) {
-        printf("[i] Detected CSV file format\n");
+    if (isCSVFile(cleanPath)) {
+        printf("[i] Detected CSV file format - now converting columns to text...\n");
         processCSVFile(f, targetWords, targetWordCount);
+        printf("[✓] CSV file converted to text format\n");
     } else {
-        printf("[i] Detected text file format\n");
+        printf("[i] Detected text file format - processing as text...\n");
         // 原有的文本文件处理逻辑
         char line[4096];
         while(fgets(line, sizeof(line), f)){
@@ -332,43 +402,10 @@ void loadTextFile(int fileNumber){
             if(*targetWordCount >= 1000) break;
         }
     }
-    
+
     fclose(f);
     *targetFileLoaded = true;
     printf("[✓] Loaded %d tokens from File %d.\n", *targetWordCount, fileNumber);
-}
-
-// ====== 新增：显示文件历史函数 ======
-void showFileHistory(int fileNumber) {
-    char* filePath = (fileNumber == 1) ? inputFilePath1 : inputFilePath2;
-    int wordCount = (fileNumber == 1) ? wordCount1 : wordCount2;
-    bool fileLoaded = (fileNumber == 1) ? file1Loaded : file2Loaded;
-    
-    printf("\n=== File %d History ===\n", fileNumber);
-    if (!fileLoaded) {
-        printf("No file loaded for File %d.\n", fileNumber);
-        return;
-    }
-    
-    // Remove quotes from file path for proper CSV detection
-    char cleanPath[256];
-    strncpy(cleanPath, filePath, sizeof(cleanPath)-1);
-    cleanPath[sizeof(cleanPath)-1] = '\0';
-    strip_quotes(cleanPath);
-    
-    printf("File path: %s\n", filePath);
-    printf("File type: %s\n", isCSVFile(cleanPath) ? "CSV" : "Text");
-    printf("Total words loaded: %d\n", wordCount);
-    
-    // 显示前10个单词作为样本
-    char (*words)[50] = (fileNumber == 1) ? words1 : words2;
-    int sampleCount = (wordCount < 10) ? wordCount : 10;
-    printf("Sample words (%d): ", sampleCount);
-    for(int i = 0; i < sampleCount; i++) {
-        printf("%s", words[i]);
-        if(i < sampleCount - 1) printf(", ");
-    }
-    printf("\n");
 }
 
 // ====== 更新：显示通用统计信息 ======
@@ -519,8 +556,8 @@ void saveResultsToFile(){
     FILE *f = fopen(path, "w");
 #endif
     if(!f){
-        fprintf(stderr, "[!] fopen(output) failed for: %s\n", path);
-        perror("    reason");
+        fprintf(stderr, "[!] open failed for: %s\n", path);
+        perror("reason: ");
         handleError("Cannot open output file");
         return;
     }
@@ -550,7 +587,8 @@ void saveResultsToFile(){
         }
     }
 
-    fprintf(f, "=== Text Analysis Report ===\n");
+    fprintf(f, "Text Analysis Report\n");
+    fprintf(f, "====================\n");
     fprintf(f, "Total tokens: %d\n", wordCount);
     fprintf(f, "Unique words: %d\n\n", ucnt);
     int topn = (ucnt < 10) ? ucnt : 10;
